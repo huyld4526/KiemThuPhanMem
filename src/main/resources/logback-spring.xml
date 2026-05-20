@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Use Spring Boot's defaults for console output and standard log variables -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+
+    <!-- Read properties from application.yml -->
+    <springProperty scope="context" name="springAppName" source="spring.application.name" defaultValue="application"/>
+    <springProperty scope="context" name="appEnv" source="app.env" defaultValue="local"/>
+    <springProperty scope="context" name="logPath" source="logging.file.path" defaultValue="logs"/>
+
+    <!-- Dev profile logs to console only -->
+    <springProfile name="dev, default">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+                <level>INFO</level>
+            </filter>
+            <encoder>
+                <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+        <root>
+            <appender-ref ref="CONSOLE" />
+        </root>
+    </springProfile>
+
+    <!-- Other profiles use only FILE -->
+    <springProfile name="!dev &amp; !default">
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <!-- Filter out DEBUG and TRACE logs -->
+            <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
+                <level>INFO</level>
+            </filter>
+            <!-- Log file will be placed in $LOG_PATH -->
+            <file>${logPath}/app.log</file>
+
+            <!-- Rotate logs daily AND by size to prevent huge files -->
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${logPath}/app.%d{yyyy-MM-dd}.%i.log</fileNamePattern>
+                <!-- Rotate when file reaches 100MB -->
+                <maxFileSize>100MB</maxFileSize>
+                <!-- Keep 7 days of history (reduce from 30 to prevent log bloat) -->
+                <maxHistory>7</maxHistory>
+                <!-- Optional: Max total size of all log files to 500MB -->
+                <totalSizeCap>500MB</totalSizeCap>
+            </rollingPolicy>
+
+            <!-- Logstash Encoder for JSON format -->
+            <!-- Fields like timestamp, level, logger, thread, message, stack_trace, and MDC are included by default -->
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <!-- Include custom fields app and env -->
+                <customFields>{"app":"${springAppName}","env":"${appEnv}"}</customFields>
+            </encoder>
+        </appender>
+        <root>
+            <appender-ref ref="FILE" />
+        </root>
+    </springProfile>
+
+</configuration>

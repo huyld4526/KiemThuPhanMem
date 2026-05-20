@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  irrigation-mysql:
+    image: mysql:latest
+    container_name: irrigation-system-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DBMS_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: irrigation_system_db
+      MYSQL_USER: ${DBMS_USERNAME:-admin_user}
+      MYSQL_PASSWORD: ${DBMS_PASSWORD:-irrigation_password}
+      TZ: Asia/Ho_Chi_Minh
+    command: --default-time-zone='+07:00'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_irrigation_data:/var/lib/mysql
+    networks:
+      - irrigation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DBMS_ROOT_PASSWORD:-root_password}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: irrigation-system-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-rabbitmq_user}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitmq_password}
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI port
+      - "1883:1883"   # MQTT port
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_mqtt && rabbitmq-server"
+    networks:
+      - irrigation-network
+    restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  irrigation-app:
+    image: ${ECR_REGISTRY:-tker}/${ECR_REPOSITORY:-irrigation-system}:${IMAGE_TAG:-latest}
+    container_name: ${CONTAINER_NAME:-irrigation-system}
+    user: "0:0"
+    ports:
+      - "80:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${ENVIRONMENT_CONFIG:-prod}
+      - TZ=Asia/Ho_Chi_Minh
+      - JAVA_TOOL_OPTIONS=-Duser.timezone=Asia/Ho_Chi_Minh
+      - LOGGING_FILE_PATH=/app/logs
+      - DATABASE_URL=jdbc:mysql://irrigation-mysql:3306/irrigation_system_db?useSSL=false&serverTimezone=Asia/Ho_Chi_Minh&allowPublicKeyRetrieval=true
+      - DATABASE_USERNAME=${DBMS_USERNAME:-admin_user}
+      - DATABASE_PASSWORD=${DBMS_PASSWORD:-irrigation_password}
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME:-rabbitmq_user}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:-rabbitmq_password}
+      - HOST_SMTP=${HOST_SMTP}
+      - PORT_SMTP=${PORT_SMTP}
+      - USERNAME_SMTP=${USERNAME_SMTP}
+      - PASSWORD_SMTP=${PASSWORD_SMTP}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - MAIL_SENDER_FROM=${MAIL_SENDER_FROM}
+    networks:
+      - irrigation-network
+    depends_on:
+      irrigation-mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - app_logs:/app/logs
+
+  loki:
+    image: grafana/loki:3.1.0
+    container_name: irrigation-system-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yml:/etc/loki/loki-config.yml:ro
+    networks:
+      - irrigation-network
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.1.0
+    container_name: irrigation-system-promtail
+    command: -config.file=/etc/promtail/promtail-config.yml -config.expand-env=true
+    volumes:
+      - app_logs:/app/logs:ro
+      - ./promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - promtail_positions:/tmp
+    networks:
+      - irrigation-network
+    depends_on:
+      loki:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  mysql_irrigation_data:
+  app_logs:
+  loki_data:
+  promtail_positions:
+
+networks:
+  irrigation-network:
+    driver: bridge
